@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,10 @@ import { cancelNotification } from '../services/notifications';
 import { removeTask } from '../redux/tasksSlice';
 import { Mic, Search, X } from 'lucide-react-native';
 import { format } from 'date-fns';
+import {
+  useSpeechRecognitionEvent,
+  setSpeechRecognitionIsEnabled,
+} from 'expo-speech-recognition';
 
 export const SmartQueryScreen: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -26,6 +30,40 @@ export const SmartQueryScreen: React.FC = () => {
   const [queryText, setQueryText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [suggestion, setSuggestion] = useState('');
+  const [recognitionInstance, setRecognitionInstance] = useState<any>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      setSpeechRecognitionIsEnabled(true);
+    }
+    return () => {
+      if (Platform.OS !== 'web') {
+        setSpeechRecognitionIsEnabled(false);
+      }
+    };
+  }, []);
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsListening(false);
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const transcript = event.results[0]?.transcript;
+    if (transcript) {
+      setQueryText(transcript);
+      handleSmartQuery(transcript);
+    }
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    console.error('Speech recognition error:', event.error);
+    setIsListening(false);
+    Alert.alert('Error', `Speech recognition failed: ${event.error}`);
+  });
 
   const handleSmartQuery = (text: string) => {
     const query = parseSmartQuery(text);
@@ -45,7 +83,7 @@ export const SmartQueryScreen: React.FC = () => {
     }
   };
 
-  const startVoiceQuery = () => {
+  const startVoiceQuery = async () => {
     if (Platform.OS === 'web') {
       if (!('webkitSpeechRecognition' in window)) {
         Alert.alert('Not Supported', 'Speech recognition is not supported in this browser');
@@ -79,13 +117,30 @@ export const SmartQueryScreen: React.FC = () => {
         setIsListening(false);
       };
 
+      setRecognitionInstance(recognition);
       recognition.start();
     } else {
-      Alert.alert(
-        'Voice Input',
-        'Voice recognition on mobile requires native modules. For now, please type your query.',
-        [{ text: 'OK' }]
-      );
+      const { ExpoSpeechRecognitionModule, getPermissionsAsync, requestPermissionsAsync } =
+        await import('expo-speech-recognition');
+
+      const { status } = await getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await requestPermissionsAsync();
+        if (newStatus !== 'granted') {
+          Alert.alert('Permission Required', 'Microphone permission is required for voice input');
+          return;
+        }
+      }
+
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: false,
+        maxAlternatives: 1,
+        continuous: false,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+        contextualStrings: [],
+      });
     }
   };
 

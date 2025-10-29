@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,10 @@ import { parseVoiceInput } from '../services/voiceParser';
 import { scheduleTaskNotification } from '../services/notifications';
 import { addTask } from '../services/storage';
 import { Mic, Plus } from 'lucide-react-native';
+import {
+  useSpeechRecognitionEvent,
+  setSpeechRecognitionIsEnabled,
+} from 'expo-speech-recognition';
 
 export const HomeScreen: React.FC = () => {
   const [isListening, setIsListening] = useState(false);
@@ -22,6 +26,38 @@ export const HomeScreen: React.FC = () => {
   const [parsedData, setParsedData] = useState<any>(null);
   const [missingFields, setMissingFields] = useState<string[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      setSpeechRecognitionIsEnabled(true);
+    }
+    return () => {
+      if (Platform.OS !== 'web') {
+        setSpeechRecognitionIsEnabled(false);
+      }
+    };
+  }, []);
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsListening(false);
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const transcript = event.results[0]?.transcript;
+    if (transcript) {
+      handleVoiceResult(transcript);
+    }
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    console.error('Speech recognition error:', event.error);
+    setIsListening(false);
+    Alert.alert('Error', `Speech recognition failed: ${event.error}`);
+  });
 
   const startVoiceRecognition = async () => {
     if (Platform.OS === 'web') {
@@ -58,27 +94,47 @@ export const HomeScreen: React.FC = () => {
 
       recognition.start();
     } else {
-      Alert.alert(
-        'Voice Input',
-        'Voice recognition on mobile requires native modules. For now, please use the + button to add tasks manually.',
-        [{ text: 'OK' }]
-      );
+      const { ExpoSpeechRecognitionModule, getPermissionsAsync, requestPermissionsAsync } =
+        await import('expo-speech-recognition');
+
+      const { status } = await getPermissionsAsync();
+      if (status !== 'granted') {
+        const { status: newStatus } = await requestPermissionsAsync();
+        if (newStatus !== 'granted') {
+          Alert.alert('Permission Required', 'Microphone permission is required for voice input');
+          return;
+        }
+      }
+
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: false,
+        maxAlternatives: 1,
+        continuous: false,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+        contextualStrings: [],
+      });
     }
   };
 
   const handleVoiceResult = (text: string) => {
     const parsed = parseVoiceInput(text);
 
-    if (parsed.missingFields.length === 0) {
+    if (parsed.isComplete) {
       createTaskFromParsed(parsed);
     } else {
+      const missing: string[] = [];
+      if (!parsed.name || parsed.name === 'New Task') missing.push('Task name');
+      if (!parsed.dueDate) missing.push('Due date');
+
       Alert.alert(
         'Some Details Missing',
-        `I understood: ${getRecognizedFieldsSummary(parsed)}\n\nMissing: ${parsed.missingFields.join(', ')}\n\nPlease fill in the missing details.`,
+        `I understood: ${getRecognizedFieldsSummary(parsed)}\n\nMissing: ${missing.join(', ')}\n\nPlease fill in the missing details.`,
         [{ text: 'OK' }]
       );
       setParsedData(parsed);
-      setMissingFields(parsed.missingFields);
+      setMissingFields(missing);
       setShowForm(true);
     }
   };
